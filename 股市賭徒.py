@@ -22,7 +22,7 @@ DATA_FILE = "portfolio.json"
 
 # 判斷當前所屬的「交易日區間」
 # 如果現在超過 14:00，就把下個交易日當作新的 session
-if tw_now.time() >= datetime.time(14, 0):
+if tw_now.hour >= 14:
     current_session = (tw_now + timedelta(days=1)).date().isoformat()
 else:
     current_session = tw_now.date().isoformat()
