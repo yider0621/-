@@ -24,7 +24,7 @@ BROKERS = {
 }
 
 # ==========================================
-# 1. 帳號登入系統
+# 1. 帳號登入系統 (➡️ 新增快速登入捷徑)
 # ==========================================
 if 'current_user' not in st.session_state:
     st.session_state.current_user = None
@@ -32,6 +32,29 @@ if 'current_user' not in st.session_state:
 if st.session_state.current_user is None:
     st.title("🔐 韭菜分析師 - 登入系統")
     st.markdown("##### 建立或登入您的個人專屬戰情室")
+    
+    # 掃描本地端已經存在的 user_XXX.json 檔案
+    existing_users = []
+    for filename in os.listdir("."):
+        if filename.startswith("user_") and filename.endswith(".json"):
+            # 把檔名的 "user_" 和 ".json" 去除，只保留名字
+            user_name = filename.replace("user_", "").replace(".json", "")
+            existing_users.append(user_name)
+    
+    # 如果有歷史紀錄，顯示快速登入按鈕
+    if existing_users:
+        st.write("👤 **快速登入 (曾建立的帳號)：**")
+        # 將按鈕排成一列 (最多排4個，超過自動換行)
+        cols = st.columns(min(len(existing_users), 4))
+        for i, user in enumerate(existing_users):
+            if cols[i % 4].button(f"🔑 {user}", use_container_width=True):
+                st.session_state.current_user = user
+                st.rerun()
+        
+        st.markdown("---")
+        st.write("✨ **或建立新帳號：**")
+
+    # 傳統文字輸入登入框
     with st.form("login_form"):
         username = st.text_input("請輸入您的名字：", max_chars=20, placeholder="例如：陳大明")
         submit = st.form_submit_button("進入戰情室")
@@ -179,7 +202,7 @@ def run_radar():
     return sorted(results, key=lambda x: x["振幅"], reverse=True)[:3]
 
 # ==========================================
-# 5. 雙面板：說明與雷達 (絕對不再消失！)
+# 5. 雙面板：說明與雷達
 # ==========================================
 with st.expander("📖 點我查看：燈號圖示說明與 AI 預測原理", expanded=False):
     col_a, col_b = st.columns(2)
