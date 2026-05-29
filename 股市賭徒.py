@@ -9,22 +9,39 @@ from datetime import datetime, timedelta
 # ==========================================
 # 網頁基本設定
 # ==========================================
-st.set_page_config(page_title="韭菜分析師 | 成本精算版", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="韭菜分析師 | 上帝模式版", layout="wide", initial_sidebar_state="expanded")
+
+# 👑 系統管理員名單 (只有用這些名字登入，才會解鎖管理員後台)
+ADMIN_USERS = ["陳奕德", "Admin", "管理員"]
 
 BROKERS = {
-    "永豐金證券 (大戶投 - 2折)": 0.2,
-    "國泰綜合證券 (2.8折)": 0.28,
-    "口袋證券 (2.8折)": 0.28,
-    "富邦證券 (6折)": 0.6,
-    "元大證券 (6折)": 0.6,
-    "凱基證券 (6折)": 0.6,
-    "玉山證券 (6折)": 0.6,
-    "群益金鼎證券 (6折)": 0.6,
-    "自訂 / 無折讓 (10折)": 1.0
+    "永豐金證券 (大戶投 - 2折)": 0.2, "國泰綜合證券 (2.8折)": 0.28, "口袋證券 (2.8折)": 0.28,
+    "富邦證券 (6折)": 0.6, "元大證券 (6折)": 0.6, "凱基證券 (6折)": 0.6,
+    "玉山證券 (6折)": 0.6, "群益金鼎證券 (6折)": 0.6, "自訂 / 無折讓 (10折)": 1.0
 }
 
 # ==========================================
-# 1. 帳號登入系統 (➡️ 新增快速登入捷徑)
+# 0. 全域系統資料庫 (用來記錄封鎖名單)
+# ==========================================
+SYSTEM_FILE = "system_config.json"
+
+def load_system_config():
+    if os.path.exists(SYSTEM_FILE):
+        try:
+            with open(SYSTEM_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            return {"blocked_users": []}
+    return {"blocked_users": []}
+
+def save_system_config(config):
+    with open(SYSTEM_FILE, "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=4)
+
+sys_config = load_system_config()
+
+# ==========================================
+# 1. 帳號登入系統與封鎖攔截
 # ==========================================
 if 'current_user' not in st.session_state:
     st.session_state.current_user = None
@@ -34,33 +51,32 @@ if st.session_state.current_user is None:
     st.markdown("##### 建立或登入您的個人專屬戰情室")
     
     # 掃描本地端已經存在的 user_XXX.json 檔案
-    existing_users = []
-    for filename in os.listdir("."):
-        if filename.startswith("user_") and filename.endswith(".json"):
-            # 把檔名的 "user_" 和 ".json" 去除，只保留名字
-            user_name = filename.replace("user_", "").replace(".json", "")
-            existing_users.append(user_name)
+    existing_users = [f.replace("user_", "").replace(".json", "") for f in os.listdir(".") if f.startswith("user_") and f.endswith(".json")]
     
-    # 如果有歷史紀錄，顯示快速登入按鈕
     if existing_users:
         st.write("👤 **快速登入 (曾建立的帳號)：**")
-        # 將按鈕排成一列 (最多排4個，超過自動換行)
-        cols = st.columns(min(len(existing_users), 4))
+        cols = st.columns(min(len(existing_users), 5))
         for i, user in enumerate(existing_users):
-            if cols[i % 4].button(f"🔑 {user}", use_container_width=True):
-                st.session_state.current_user = user
-                st.rerun()
-        
+            if cols[i % 5].button(f"🔑 {user}", use_container_width=True):
+                # 攔截黑名單
+                if user in sys_config.get("blocked_users", []):
+                    st.error(f"🚫 登入失敗！帳號「{user}」已被管理員封鎖。")
+                else:
+                    st.session_state.current_user = user
+                    st.rerun()
         st.markdown("---")
         st.write("✨ **或建立新帳號：**")
 
-    # 傳統文字輸入登入框
     with st.form("login_form"):
         username = st.text_input("請輸入您的名字：", max_chars=20, placeholder="例如：陳大明")
         submit = st.form_submit_button("進入戰情室")
         if submit and username.strip():
-            st.session_state.current_user = username.strip()
-            st.rerun()
+            clean_name = username.strip()
+            if clean_name in sys_config.get("blocked_users", []):
+                st.error(f"🚫 登入失敗！帳號「{clean_name}」已被管理員封鎖。")
+            else:
+                st.session_state.current_user = clean_name
+                st.rerun()
         elif submit:
             st.warning("⚠️ 名字不能為空！")
     st.stop()
@@ -78,12 +94,7 @@ else:
     current_session = tw_now.date().isoformat()
 
 def load_data():
-    default_data = {
-        "session_date": current_session, 
-        "portfolio": {}, 
-        "pnl_history": [],
-        "broker": "永豐金證券 (大戶投 - 2折)" 
-    }
+    default_data = {"session_date": current_session, "portfolio": {}, "pnl_history": [], "broker": "永豐金證券 (大戶投 - 2折)"}
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
@@ -100,12 +111,7 @@ def load_data():
 
 def save_data(portfolio_data, pnl_data, broker):
     trimmed_pnl = pnl_data[-10:] if len(pnl_data) > 10 else pnl_data
-    data_to_save = {
-        "session_date": current_session,
-        "portfolio": portfolio_data,
-        "pnl_history": trimmed_pnl,
-        "broker": broker
-    }
+    data_to_save = {"session_date": current_session, "portfolio": portfolio_data, "pnl_history": trimmed_pnl, "broker": broker}
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data_to_save, f, ensure_ascii=False, indent=4)
 
@@ -113,11 +119,61 @@ if 'db' not in st.session_state:
     st.session_state.db = load_data()
 
 # ==========================================
-# 3. 側邊欄：個人檔案與損益紀錄
+# 3. 側邊欄：個人檔案、權限管理與損益紀錄
 # ==========================================
 with st.sidebar:
-    st.header(f"👤 {USER} 的專屬檔案")
+    # 👑 上帝模式判斷
+    is_admin = USER in ADMIN_USERS
+    role_icon = "👑 (管理員)" if is_admin else "👤 (一般用戶)"
     
+    st.header(f"{role_icon} {USER}")
+    
+    # --- 管理員專屬後台 ---
+    if is_admin:
+        with st.expander("🛠️ 管理員控制台", expanded=True):
+            st.markdown("⚠️ **生殺大權，謹慎使用**")
+            # 抓取所有現存用戶 (排除自己)
+            all_users = [f.replace("user_", "").replace(".json", "") for f in os.listdir(".") if f.startswith("user_") and f.endswith(".json")]
+            target_users = [u for u in all_users if u != USER]
+            
+            if target_users:
+                user_to_manage = st.selectbox("選擇懲罰對象：", ["請選擇..."] + target_users)
+                if user_to_manage != "請選擇...":
+                    col_m1, col_m2 = st.columns(2)
+                    with col_m1:
+                        if st.button("🚫 封鎖帳號"):
+                            if user_to_manage not in sys_config["blocked_users"]:
+                                sys_config["blocked_users"].append(user_to_manage)
+                                save_system_config(sys_config)
+                                st.success(f"已封鎖 {user_to_manage}！")
+                                time.sleep(1)
+                                st.rerun()
+                    with col_m2:
+                        if st.button("🗑️ 刪除檔案"):
+                            try:
+                                os.remove(f"user_{user_to_manage}.json")
+                                st.success(f"已徹底刪除 {user_to_manage}！")
+                                time.sleep(1)
+                                st.rerun()
+                            except:
+                                st.error("刪除失敗。")
+            else:
+                st.caption("目前沒有其他使用者。")
+            
+            # 解除封鎖專區
+            blocked_list = sys_config.get("blocked_users", [])
+            if blocked_list:
+                st.markdown("---")
+                user_to_unblock = st.selectbox("選擇赦免對象：", ["請選擇..."] + blocked_list)
+                if user_to_unblock != "請選擇..." and st.button("✅ 解除封鎖"):
+                    sys_config["blocked_users"].remove(user_to_unblock)
+                    save_system_config(sys_config)
+                    st.success(f"已解除 {user_to_unblock} 的封鎖！")
+                    time.sleep(1)
+                    st.rerun()
+
+    # --- 一般用戶 / 券商設定 ---
+    st.markdown("---")
     current_broker = st.session_state.db.get("broker", "永豐金證券 (大戶投 - 2折)")
     broker_list = list(BROKERS.keys())
     broker_index = broker_list.index(current_broker) if current_broker in broker_list else 0
@@ -129,32 +185,40 @@ with st.sidebar:
         st.rerun()
         
     discount = BROKERS[selected_broker]
-    st.caption(f"目前計算基準：手續費 {discount*10} 折，當沖證交稅 0.15%")
     
-    if st.button("🚪 登出", use_container_width=True):
-        st.session_state.current_user = None
-        st.session_state.pop('db', None)
-        st.rerun()
-        
     st.markdown("---")
     st.subheader("💰 每日真實損益日誌 (近10天)")
-    
     pnl_data = st.session_state.db.get("pnl_history", [])
     if not pnl_data:
         pnl_data = [{"日期": tw_now.strftime("%Y-%m-%d"), "淨損益(扣手續費)": 0, "檢討備註": "開始紀錄！"}]
     
     pnl_df = pd.DataFrame(pnl_data)
     edited_pnl = st.data_editor(pnl_df, num_rows="dynamic", use_container_width=True, hide_index=True)
-    
     new_pnl_list = edited_pnl.to_dict(orient="records")
     if new_pnl_list != st.session_state.db.get("pnl_history", []):
         st.session_state.db["pnl_history"] = new_pnl_list
         save_data(st.session_state.db["portfolio"], new_pnl_list, st.session_state.db["broker"])
 
+    # --- 帳號登出與自我銷毀 (所有人都有) ---
+    st.markdown("---")
+    if st.button("🚪 登出系統", use_container_width=True):
+        st.session_state.current_user = None
+        st.session_state.pop('db', None)
+        st.rerun()
+        
+    if st.button("🧨 永久刪除我的帳號", use_container_width=True, type="primary"):
+        try:
+            os.remove(DATA_FILE)
+        except:
+            pass
+        st.session_state.current_user = None
+        st.session_state.pop('db', None)
+        st.rerun()
+
 # ==========================================
 # 4. 核心功能與 AI 演算法
 # ==========================================
-st.title("🥬 你的錢包，我來當沖 (成本精算版)")
+st.title("🥬 你的錢包，我來當沖 (上帝模式版)")
 
 @st.cache_data(ttl=10) 
 def get_stock_data(ticker):
@@ -163,9 +227,7 @@ def get_stock_data(ticker):
         stock = yf.Ticker(f"{ticker_str}.TW")
         hist = stock.history(period="1d", interval="1m")
         if hist.empty: return None
-        
         current_price = round(hist['Close'].iloc[-1], 2)
-        total_volume = int(hist['Volume'].sum())
         
         hist['Typical_Price'] = (hist['High'] + hist['Low'] + hist['Close']) / 3
         hist['Cum_Vol'] = hist['Volume'].cumsum()
@@ -174,7 +236,7 @@ def get_stock_data(ticker):
         if hist['Cum_Vol'].iloc[-1] > 0:
             vwap = round(hist['Cum_Vol_Price'].iloc[-1] / hist['Cum_Vol'].iloc[-1], 2)
             
-        return {"price": current_price, "vwap": vwap, "volume": total_volume, "high": hist['High'].max(), "low": hist['Low'].min()}
+        return {"price": current_price, "vwap": vwap, "high": hist['High'].max(), "low": hist['Low'].min()}
     except:
         return None
 
@@ -188,7 +250,7 @@ def analyze_trend(current_price, vwap, high, low):
         trend_score -= 15
         strategy = f"📉 偏空 (建議反彈 {vwap} 不過做空)"
     else:
-        strategy = "⚖️ 多空交戰 (靠近均價線)"
+        strategy = "⚖️ 多空交戰"
     return direction if (direction := "🚀 突破機率高" if current_price >= high * 0.99 else "🪂 破底機率高" if current_price <= low * 1.01 else "盤整中") else "盤整中", max(10, min(90, trend_score)), strategy
 
 @st.cache_data(ttl=3600) 
@@ -202,46 +264,30 @@ def run_radar():
     return sorted(results, key=lambda x: x["振幅"], reverse=True)[:3]
 
 # ==========================================
-# 5. 雙面板：說明與雷達
+# 5. 雙面板與操作區
 # ==========================================
 with st.expander("📖 點我查看：燈號圖示說明與 AI 預測原理", expanded=False):
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.markdown("""
-        **【持倉中燈號】**
-        * 🔴 **斷尾求生 (強制停損)**：淨報酬率觸及 **-1.5%** 或 **現價跌破動態均價線**。
-        * 🔵 **入袋為安 (達標停利)**：真實淨獲利達到 **+2.0%** 以上。
-        * 🟡 **繼續煎熬 (持有觀察)**：獲利未達標，也沒跌破防線。
-        """)
-    with col_b:
-        st.markdown("""
-        **【空手觀察燈號】**
-        * 🟢 **準備上車 (站上均價)**：股價強勢站在均價線之上。
-        * ⚪ **旁邊玩沙 (均價之下)**：股價弱勢，手綁起來絕對不要買多。
-        """)
-    st.info("💡 **核心指標【動態均價線 VWAP】**：當沖最重要的生命線！代表今天所有市場參與者的平均買進成本。\n\n🤖 **AI 趨勢分析**：根據股價與均價線乖離率推算多方勝率。>50% 偏多，<50% 偏空。")
+    st.markdown("""
+    * 🔴 **斷尾求生 (強制停損)**：淨報酬觸及 **-1.5%** 或 **跌破均價線**。
+    * 🔵 **入袋為安 (達標停利)**：淨報酬達 **+2.0%**。
+    * 🟢 **準備上車 (站上均價)**：空手且強勢站在均價線之上。
+    """)
 
 with st.expander("📡 AI 雷達戰術板 (今日最佳衝浪標的)", expanded=False):
     radar_picks = run_radar()
     if radar_picks:
         for i, pick in enumerate(radar_picks):
             st.info(f"**🏆 Top {i+1}: {pick['名稱']} ({pick['代號']})** ｜ 現價: {pick['現價']} ｜ 振幅: {pick['振幅']:.2f}% \n\n 🤖 **AI 戰術：** {pick['策略']}")
-    else:
-        st.write("雷達收集中或假日休市。")
 
 st.markdown("---")
-
-# ==========================================
-# 6. 新增自選股與儀表板
-# ==========================================
 st.subheader("➕ 佈署新戰場")
 col1, col2, col3, col4 = st.columns([2, 2, 2, 4])
 with col1:
-    new_ticker = st.text_input("股票代號 (如: 2330)", max_chars=6)
+    new_ticker = st.text_input("股票代號", max_chars=6)
 with col2:
-    new_name = st.text_input("股票名稱 (如: 台積電)")
+    new_name = st.text_input("股票名稱")
 with col3:
-    new_entry = st.number_input("進場價 (未進場填0)", min_value=0.0, step=0.1, value=0.0)
+    new_entry = st.number_input("進場價 (未進填0)", min_value=0.0, step=0.1, value=0.0)
 with col4:
     st.write("") 
     st.write("")
@@ -255,13 +301,13 @@ with col4:
 st.markdown("---")
 col_title, col_btn1, col_btn2 = st.columns([6, 2, 2])
 with col_title:
-    st.subheader("🎯 當沖戰情室 (含真實交易成本計算)")
+    st.subheader("🎯 當沖戰情室 (含真實成本計算)")
 with col_btn1:
     if st.button("🔄 強制手動更新"):
         st.cache_data.clear() 
         st.rerun()
 with col_btn2:
-    auto_refresh = st.toggle("⚡ 開啟自動更新 (10秒)", value=False)
+    auto_refresh = st.toggle("⚡ 開啟自動更新", value=False)
 
 display_data = []
 for ticker, info in st.session_state.db["portfolio"].items():
