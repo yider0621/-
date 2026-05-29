@@ -11,8 +11,9 @@ from datetime import datetime, timedelta
 # ==========================================
 st.set_page_config(page_title="韭菜分析師 | 上帝模式版", layout="wide", initial_sidebar_state="expanded")
 
-# 👑 系統管理員名單 (只有用這些名字登入，才會解鎖管理員後台)
+# 👑 系統管理員名單與密碼設定
 ADMIN_USERS = ["陳奕德", "Admin", "管理員"]
+ADMIN_PASSWORD = "8888"  # ⬅️ 在這裡設定你的專屬管理員密碼 (可隨時修改)
 
 BROKERS = {
     "永豐金證券 (大戶投 - 2折)": 0.2, "國泰綜合證券 (2.8折)": 0.28, "口袋證券 (2.8折)": 0.28,
@@ -41,7 +42,7 @@ def save_system_config(config):
 sys_config = load_system_config()
 
 # ==========================================
-# 1. 帳號登入系統與封鎖攔截
+# 1. 帳號登入系統與封鎖攔截 (🛡️ 新增密碼驗證)
 # ==========================================
 if 'current_user' not in st.session_state:
     st.session_state.current_user = None
@@ -50,11 +51,12 @@ if st.session_state.current_user is None:
     st.title("🔐 韭菜分析師 - 登入系統")
     st.markdown("##### 建立或登入您的個人專屬戰情室")
     
-    # 掃描本地端已經存在的 user_XXX.json 檔案
-    existing_users = [f.replace("user_", "").replace(".json", "") for f in os.listdir(".") if f.startswith("user_") and f.endswith(".json")]
+    # 掃描本地端已經存在的 user_XXX.json 檔案 (把管理員從捷徑中剔除，保護隱私)
+    raw_users = [f.replace("user_", "").replace(".json", "") for f in os.listdir(".") if f.startswith("user_") and f.endswith(".json")]
+    existing_users = [u for u in raw_users if u not in ADMIN_USERS]
     
     if existing_users:
-        st.write("👤 **快速登入 (曾建立的帳號)：**")
+        st.write("👤 **一般用戶快速登入：**")
         cols = st.columns(min(len(existing_users), 5))
         for i, user in enumerate(existing_users):
             if cols[i % 5].button(f"🔑 {user}", use_container_width=True):
@@ -65,18 +67,34 @@ if st.session_state.current_user is None:
                     st.session_state.current_user = user
                     st.rerun()
         st.markdown("---")
-        st.write("✨ **或建立新帳號：**")
+        st.write("✨ **或手動登入 / 建立新帳號：**")
 
+    # 傳統文字輸入登入框 (加入密碼欄位)
     with st.form("login_form"):
         username = st.text_input("請輸入您的名字：", max_chars=20, placeholder="例如：陳大明")
+        password = st.text_input("密碼 (僅管理員需要填寫，一般用戶留白即可)：", type="password")
         submit = st.form_submit_button("進入戰情室")
+        
         if submit and username.strip():
             clean_name = username.strip()
+            
+            # 1. 檢查是否在黑名單
             if clean_name in sys_config.get("blocked_users", []):
                 st.error(f"🚫 登入失敗！帳號「{clean_name}」已被管理員封鎖。")
+            
+            # 2. 檢查是否為管理員，若是則核對密碼
+            elif clean_name in ADMIN_USERS:
+                if password == ADMIN_PASSWORD:
+                    st.session_state.current_user = clean_name
+                    st.rerun()
+                else:
+                    st.error("🚫 登入失敗！管理員密碼錯誤，拒絕存取。")
+            
+            # 3. 一般用戶正常登入 (不管密碼)
             else:
                 st.session_state.current_user = clean_name
                 st.rerun()
+                
         elif submit:
             st.warning("⚠️ 名字不能為空！")
     st.stop()
@@ -132,9 +150,8 @@ with st.sidebar:
     if is_admin:
         with st.expander("🛠️ 管理員控制台", expanded=True):
             st.markdown("⚠️ **生殺大權，謹慎使用**")
-            # 抓取所有現存用戶 (排除自己)
             all_users = [f.replace("user_", "").replace(".json", "") for f in os.listdir(".") if f.startswith("user_") and f.endswith(".json")]
-            target_users = [u for u in all_users if u != USER]
+            target_users = [u for u in all_users if u not in ADMIN_USERS]
             
             if target_users:
                 user_to_manage = st.selectbox("選擇懲罰對象：", ["請選擇..."] + target_users)
@@ -160,7 +177,6 @@ with st.sidebar:
             else:
                 st.caption("目前沒有其他使用者。")
             
-            # 解除封鎖專區
             blocked_list = sys_config.get("blocked_users", [])
             if blocked_list:
                 st.markdown("---")
@@ -199,7 +215,6 @@ with st.sidebar:
         st.session_state.db["pnl_history"] = new_pnl_list
         save_data(st.session_state.db["portfolio"], new_pnl_list, st.session_state.db["broker"])
 
-    # --- 帳號登出與自我銷毀 (所有人都有) ---
     st.markdown("---")
     if st.button("🚪 登出系統", use_container_width=True):
         st.session_state.current_user = None
