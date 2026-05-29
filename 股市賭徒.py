@@ -2,45 +2,117 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import time
+import json
+import os
+from datetime import datetime, timedelta
 
 # ==========================================
-# 網頁基本設定 
+# 網頁基本設定
 # ==========================================
 st.set_page_config(page_title="韭菜分析師", layout="wide")
 st.title("🥬 你的錢包，我來當沖")
-st.markdown("##### 韭菜分析師專屬儀表板：不再被當提款機的最後防線")
+st.markdown("##### 韭菜分析師專屬儀表板：自帶 14:00 自動斷捨離與選股雷達")
 
 # ==========================================
-# ➡️ 新增區塊：圖示與燈號說明 (可展開面板)
+# 系統時間與資料庫設定
 # ==========================================
-with st.expander("📖 點我查看：燈號圖示說明與當沖心法", expanded=False):
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.markdown("""
-        **【持倉中燈號】** (有輸入進場價)
-        * 🔴 **斷尾求生 (強制停損)**：虧損觸及 **-1.5%** 或股價 **跌破動態均價線**。請無腦市價砍單，保命要緊！
-        * 🔵 **入袋為安 (達標停利)**：帳面獲利達到 **+2.0%** 以上。
-        * 🟡 **繼續煎熬 (持有觀察)**：獲利未達標，也沒跌破防線，讓子彈飛一會兒。
-        """)
-    with col_b:
-        st.markdown("""
-        **【空手觀察燈號】** (進場價設為 0)
-        * 🟢 **準備上車 (站上均價)**：股價強勢站在均價線之上，可尋找切入點。
-        * ⚪ **旁邊玩沙 (均價之下)**：股價弱勢，主力都在倒貨，手綁起來絕對不要買多。
-        """)
+# 取得台灣時間 (UTC+8)
+tw_now = datetime.utcnow() + timedelta(hours=8)
+DATA_FILE = "portfolio.json"
+
+# 判斷當前所屬的「交易日區間」
+# 如果現在超過 14:00，就把下個交易日當作新的 session
+if tw_now.time() >= datetime.time(14, 0):
+    current_session = (tw_now + timedelta(days=1)).date().isoformat()
+else:
+    current_session = tw_now.date().isoformat()
+
+# 讀取本地資料庫 (JSON)
+def load_data():
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                # 檢查是否需要執行 14:00 每日大洗牌
+                if data.get("session_date") != current_session:
+                    return {"session_date": current_session, "portfolio": {}}
+                return data
+        except:
+            return {"session_date": current_session, "portfolio": {}}
+    return {"session_date": current_session, "portfolio": {}}
+
+# 寫入本地資料庫 (JSON)
+def save_data(portfolio_data):
+    data_to_save = {
+        "session_date": current_session,
+        "portfolio": portfolio_data
+    }
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data_to_save, f, ensure_ascii=False, indent=4)
+
+# 初始化狀態
+if 'db' not in st.session_state:
+    st.session_state.db = load_data()
+
+# ==========================================
+# 當沖選股雷達 (自動尋找高振幅標的)
+# ==========================================
+@st.cache_data(ttl=3600) # 雷達一小時更新一次即可
+def run_radar():
+    # 精選高波動候選池 (涵蓋半導體、記憶體、面板、重電、航運等熱門當沖族群)
+    candidates = {
+        "2330": "台積電", "2317": "鴻海", "3481": "群創", 
+        "6770": "力積電", "2408": "南亞科", "3260": "威剛", "2344": "華邦電",
+        "2603": "長榮", "1519": "華城", "3231": "緯創", "2382": "廣達"
+    }
     
-    st.info("💡 **核心指標【動態均價線 VWAP】**：當沖最重要的生命線！代表今天所有市場參與者的平均買進成本。股價在均價線上代表多方控盤；跌破均價線代表大家都套牢發生多殺多，此時做多極度危險。")
+    results = []
+    for ticker, name in candidates.items():
+        try:
+            stock = yf.Ticker(f"{ticker}.TW")
+            hist = stock.history(period="1d")
+            if not hist.empty:
+                high = hist['High'].iloc[-1]
+                low = hist['Low'].iloc[-1]
+                open_p = hist['Open'].iloc[-1]
+                
+                # 計算日內振幅: (高-低) / 開盤價
+                if open_p > 0:
+                    amplitude = ((high - low) / open_p) * 100
+                    results.append({
+                        "代號": ticker, 
+                        "名稱": name, 
+                        "振幅(%)": round(amplitude, 2),
+                        "今日高低價差": round(high - low, 2)
+                    })
+        except:
+            pass
+            
+    # 依照振幅排序，取前三名
+    results = sorted(results, key=lambda x: x["振幅(%)"], reverse=True)[:3]
+    return results
+
+# ==========================================
+# 雷達顯示區塊 (側邊欄或展開面板)
+# ==========================================
+with st.expander("📡 當沖選股雷達 (尋找今日最佳衝浪標的)", expanded=False):
+    st.markdown("雷達掃描邏輯：從熱門高週轉率族群中，自動挑選**日內振幅最大**的前三名股票。振幅夠大，才有價差空間！")
+    radar_picks = run_radar()
+    
+    if radar_picks:
+        cols = st.columns(3)
+        for i, pick in enumerate(radar_picks):
+            with cols[i]:
+                st.metric(
+                    label=f"🏆 Top {i+1}: {pick['名稱']} ({pick['代號']})", 
+                    value=f"振幅 {pick['振幅(%)']}%", 
+                    delta=f"高低價差 {pick['今日高低價差']} 元",
+                    delta_color="off"
+                )
+    else:
+        st.write("雷達收集中或假日休市。")
 
 st.markdown("---")
-
-# ==========================================
-# 狀態管理 (Session State)
-# ==========================================
-if 'portfolio' not in st.session_state:
-    st.session_state.portfolio = {
-        "6770": {"名稱": "力積電", "進場價": 84.0},
-        "3481": {"名稱": "群創", "進場價": 0.0}
-    }
 
 # ==========================================
 # 核心功能：抓取即時報價 (快取 10 秒)
@@ -49,28 +121,22 @@ if 'portfolio' not in st.session_state:
 def get_stock_data(ticker):
     try:
         ticker_str = str(ticker).strip()
-        if not ticker_str:
-            return 0.0, 0.0
-            
         stock = yf.Ticker(f"{ticker_str}.TW")
         hist = stock.history(period="1d", interval="1m")
-        
         if hist.empty:
             return 0.0, 0.0
         
         current_price = round(hist['Close'].iloc[-1], 2)
-        
         hist['Typical_Price'] = (hist['High'] + hist['Low'] + hist['Close']) / 3
         hist['Cum_Vol'] = hist['Volume'].cumsum()
         hist['Cum_Vol_Price'] = (hist['Typical_Price'] * hist['Volume']).cumsum()
         
+        vwap = current_price
         if hist['Cum_Vol'].iloc[-1] > 0:
             vwap = round(hist['Cum_Vol_Price'].iloc[-1] / hist['Cum_Vol'].iloc[-1], 2)
-        else:
-            vwap = current_price
             
         return current_price, vwap
-    except Exception as e:
+    except:
         return 0.0, 0.0
 
 # ==========================================
@@ -87,8 +153,9 @@ with col3:
     st.write("")
     if st.button("加入監控面板"):
         if new_ticker and new_name:
-            st.session_state.portfolio[new_ticker] = {"名稱": new_name, "進場價": 0.0}
-            st.success(f"✅ {new_name} ({new_ticker}) 已加入戰場！")
+            st.session_state.db["portfolio"][new_ticker] = {"名稱": new_name, "進場價": 0.0}
+            save_data(st.session_state.db["portfolio"]) # 立即存檔
+            st.success(f"✅ {new_name} ({new_ticker}) 已加入戰場並存檔！")
             st.rerun()
         else:
             st.warning("請填寫代號與名稱！")
@@ -109,7 +176,7 @@ with col_btn2:
     auto_refresh = st.toggle("⚡ 開啟自動更新 (10秒)", value=False)
 
 display_data = []
-for ticker, info in st.session_state.portfolio.items():
+for ticker, info in st.session_state.db["portfolio"].items():
     current_price, vwap = get_stock_data(ticker)
     
     row = {
@@ -133,20 +200,19 @@ for ticker, info in st.session_state.portfolio.items():
             row["行動指令"] = "🔵 入袋為安 (達標停利)"
         else:
             row["行動指令"] = "🟡 繼續煎熬 (持有觀察)"
-            
     elif current_price > 0:
         if current_price > vwap:
             row["行動指令"] = "🟢 準備上車 (站上均價)"
         else:
             row["行動指令"] = "⚪ 旁邊玩沙 (均價之下)"
     else:
-        row["行動指令"] = "⚠️ 報價異常 (請檢查代號)"
+        row["行動指令"] = "⚠️ 報價異常"
         
     display_data.append(row)
 
 df = pd.DataFrame(display_data)
 
-st.markdown("💡 **操作手冊：直接在表格內修改「股票代號」或「進場價」，系統會自動抓新報價。打勾可移除該列。編輯時請先關閉右上角自動更新。**")
+st.markdown(f"💡 **系統狀態：** 目前資料區間為 `{current_session}`。每日 14:00 將自動清空所有資料，迎接新戰場。")
 
 edited_df = st.data_editor(
     df,
@@ -155,6 +221,7 @@ edited_df = st.data_editor(
     width="stretch"
 )
 
+# 核對編輯並存檔
 need_rerun = False
 new_portfolio = {}
 
@@ -170,8 +237,10 @@ for index, row in edited_df.iterrows():
     new_entry_price = float(row["你的進場價"])
     new_portfolio[ticker] = {"名稱": new_name, "進場價": new_entry_price}
 
-if new_portfolio != st.session_state.portfolio:
-    st.session_state.portfolio = new_portfolio 
+# 如果有任何變動（修改價格、代號、或刪除），就寫入 JSON 檔案
+if new_portfolio != st.session_state.db["portfolio"]:
+    st.session_state.db["portfolio"] = new_portfolio 
+    save_data(new_portfolio)
     st.rerun() 
 
 if auto_refresh:
